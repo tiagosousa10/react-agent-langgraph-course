@@ -1,94 +1,65 @@
-import operator
-from dataclasses import dataclass
-from typing import Annotated, Literal
+from collections.abc import Sequence
+from typing import Annotated, TypedDict
 
-from langgraph.graph import END, START, StateGraph
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import BaseMessage, HumanMessage
+from langgraph.graph import END, START, StateGraph, add_messages
+from langgraph.graph.message import Messages
+from langgraph.graph.state import RunnableConfig
 from rich import print
-
-# Este é o mesmo código anterior, só removi os comentários.
-
-# Definições do estado e dos nodes
-
-
-@dataclass
-class State:
-    nodes_path: Annotated[list[str], operator.add]  # operator.add = a + b
-    # Vamos usar esse current_number para nossa conditional edge
-    current_number: float = 0
+from rich.markdown import Markdown
+from langgraph.checkpoint.memory import InMemorySaver
+import threading
 
 
-def node_a(state: State) -> State:
-    final_state: State = State(nodes_path=["A"], current_number=state.current_number)
-    print("> node_a em execução", f"{state=}", f"{final_state=}")
-    return final_state  # só estou gerando um novo estado
-
-
-def node_b(state: State) -> State:
-    final_state: State = State(nodes_path=["B"], current_number=state.current_number)
-    print("> node_b em execução", f"{state=}", f"{final_state=}")
-    return final_state  # só estou gerando um novo estado
-
-
-# TEMOS UM NOVO NODE!
-def node_c(state: State) -> State:
-    final_state: State = State(nodes_path=["C"], current_number=state.current_number)
-    print("> node_c em execução", f"{state=}", f"{final_state=}")
-    return final_state  # só estou gerando um novo estado
+llm = init_chat_model("google_genai:gemini-2.5-flash")
+# llm = init_chat_model("ollama:gpt-oss:20b")
 
 
 
-def the_conditions(state: State) -> Literal["goes_to_b", "goes_to_c"]:
-
-    b_max_number = 50
-    should_go_to_b = state.current_number <= b_max_number
 
 
-
-    if should_go_to_b:
-        # Então retornamos o nome da edge para o grafo seguir
-        return "goes_to_b"
-
-    # Único outro caminho possível é este
-    return "goes_to_c"
+# 1 - Defino o meu state
+class AgentState(TypedDict):
+    messages: Annotated[Sequence[BaseMessage], add_messages]
 
 
-# Definição e compilação do grafo
+# 2 - Defino os meus nodes
+def call_llm(state: AgentState) -> AgentState:
+    llm_result = llm.invoke(state["messages"])
+    return {"messages": [llm_result]}
 
+
+# 3 - Crio o StateGraph
 builder = StateGraph(
-    State, input_schema=State, context_schema=None, output_schema=State
+    AgentState, context_schema=None, input_schema=AgentState, output_schema=AgentState
 )
 
-builder.add_node("A", node_a)
-builder.add_node("B", node_b)
-builder.add_node("C", node_c)  # NOVO NODE!!!
+# 4 - Adicionar nodes ao grafo
+builder.add_node("call_llm", call_llm)
+builder.add_edge(START, "call_llm")
+builder.add_edge("call_llm", END)
 
+# 5 - Compilar o grafo
+checkpointer = InMemorySaver()
+graph = builder.compile(checkpointer=checkpointer)
+config = RunnableConfig(configurable={"thread_id": threading.get_ident()})
 
-builder.add_edge(START, "A")
+if __name__ == "__main__":
+    current_messages: Sequence[BaseMessage] = []
 
-builder.add_conditional_edges(
-    "A",
-    the_conditions,
-    {
-        "goes_to_b": "B",
-        "goes_to_c": "C",
-    },
-)
+    while True:
+        user_input = input("Digite sua mensagem: ")
+        print(Markdown("---"))
 
-# E agora qual nome vai para END? `B` e `C`.
-builder.add_edge("B", END)
-builder.add_edge("C", END)
+        if user_input.lower() in ["q", "quit"]:
+            print("Bye 👋")
+            print(Markdown("---"))
+            break
 
+        human_message = HumanMessage(user_input)
 
-graph = builder.compile()
+        result = graph.invoke({"messages": [human_message]}, config=config)
 
-# Execução do código
-
-print()
-# 10 deve ir de `A` para `B`
-response = graph.invoke(State(nodes_path=[], current_number=10))
-print(f"{response=}")
-print()
-# 51 deve ir de `A` para `C`
-response = graph.invoke(State(nodes_path=[], current_number=51))
-print(f"{response=}")
-print()
+        print(Markdown(str(result["messages"][-1].content)))
+        print(Markdown("---"))
