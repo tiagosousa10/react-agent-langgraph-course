@@ -1,22 +1,17 @@
+import threading
 from collections.abc import Sequence
 from typing import Annotated, TypedDict
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import BaseMessage, HumanMessage
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph, add_messages
-from langgraph.graph.message import Messages
 from langgraph.graph.state import RunnableConfig
 from rich import print
 from rich.markdown import Markdown
-from langgraph.checkpoint.memory import InMemorySaver
-import threading
 
-
-llm = init_chat_model("google_genai:gemini-2.5-flash")
-# llm = init_chat_model("ollama:gpt-oss:20b")
-
-
-
+# llm = init_chat_model("google_genai:gemini-2.5-flash")
+llm = init_chat_model("ollama:gpt-oss:20b")
 
 
 # 1 - Defino o meu state
@@ -46,8 +41,6 @@ graph = builder.compile(checkpointer=checkpointer)
 config = RunnableConfig(configurable={"thread_id": threading.get_ident()})
 
 if __name__ == "__main__":
-    current_messages: Sequence[BaseMessage] = []
-
     while True:
         user_input = input("Digite sua mensagem: ")
         print(Markdown("---"))
@@ -58,7 +51,6 @@ if __name__ == "__main__":
             break
 
         human_message = HumanMessage(user_input)
-
         result = graph.invoke({"messages": [human_message]}, config=config)
 
         print(Markdown(str(result["messages"][-1].content)))
